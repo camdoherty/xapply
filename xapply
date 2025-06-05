@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import subprocess
+from pathlib import Path
+
+PROFILE_DIR = Path.home() / '.config' / 'xapply'
+PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+XFCE_DESKTOP_CHANNEL = 'xfce4-desktop'
+XSETTINGS_CHANNEL = 'xsettings'
+
+# List of keys to capture from xsettings
+XSETTINGS_KEYS = ['/Net/ThemeName', '/Net/IconThemeName']
+
+def xfconf_get(channel: str, prop: str) -> str:
+    result = subprocess.run(['xfconf-query', '-c', channel, '-p', prop],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return ''
+
+def xfconf_set(channel: str, prop: str, value: str):
+    subprocess.run(['xfconf-query', '-c', channel, '-p', prop, '-s', value],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def collect_desktop_properties() -> dict:
+    result = subprocess.run(['xfconf-query', '-c', XFCE_DESKTOP_CHANNEL, '-l'],
+                            stdout=subprocess.PIPE, text=True)
+    props = result.stdout.strip().splitlines()
+    desktop_values = {}
+    for prop in props:
+        val = xfconf_get(XFCE_DESKTOP_CHANNEL, prop)
+        desktop_values[prop] = val
+    return desktop_values
+
+
+def save_profile(name: str):
+    data = {}
+    # Save xsettings keys
+    for key in XSETTINGS_KEYS:
+        data[key] = xfconf_get(XSETTINGS_CHANNEL, key)
+    # Save desktop backdrop keys
+    data['desktop'] = collect_desktop_properties()
+    out = PROFILE_DIR / f'{name}.json'
+    with open(out, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f'Saved profile to {out}')
+
+
+def apply_profile(name: str):
+    profile = PROFILE_DIR / f'{name}.json'
+    if not profile.exists():
+        print(f'Profile {name} not found in {PROFILE_DIR}')
+        return
+    with open(profile) as f:
+        data = json.load(f)
+    for key in XSETTINGS_KEYS:
+        if key in data:
+            xfconf_set(XSETTINGS_CHANNEL, key, data[key])
+    desktop = data.get('desktop', {})
+    for prop, val in desktop.items():
+        xfconf_set(XFCE_DESKTOP_CHANNEL, prop, val)
+    print(f'Applied profile {name}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Save or apply XFCE appearance profiles')
+    sub = parser.add_subparsers(dest='cmd')
+
+    s = sub.add_parser('save', help='Save current appearance as a profile')
+    s.add_argument('name')
+
+    a = sub.add_parser('apply', help='Apply a saved appearance profile')
+    a.add_argument('name')
+
+    args = parser.parse_args()
+    if args.cmd == 'save':
+        save_profile(args.name)
+    elif args.cmd == 'apply':
+        apply_profile(args.name)
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()
